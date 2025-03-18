@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/mrityunjay-vashisth/go-apigen/pkg/generator"
@@ -16,49 +17,64 @@ type User struct {
 }
 
 func main() {
-	// 1) Parse the OpenAPI file
+	// 1) Parse the OpenAPI spec
 	doc, err := generator.ParseOpenAPIFile("openapi.yaml")
 	if err != nil {
-		log.Fatalf("Failed to parse OpenAPI spec: %v", err)
+		log.Fatalf("Failed to parse OpenAPI: %v", err)
 	}
 
-	// 2) Create a map of operationId -> handler function
+	// 2) Define a map of operationId -> RouteDefinition
 	ops := generator.OperationMap{
-		"listUsers":   listUsersHandler,   // for GET /users
-		"getUserById": getUserByIdHandler, // for GET /users/{userId}
+		"listUsers": generator.RouteDefinition{
+			Handler:     listUsersHandler,
+			Middlewares: []mux.MiddlewareFunc{logOperationMiddleware("listUsers")},
+		},
+		"getUserById": generator.RouteDefinition{
+			Handler:     getUserByIdHandler,
+			Middlewares: []mux.MiddlewareFunc{logOperationMiddleware("getUserById")},
+		},
 	}
 
-	// 3) Build the Gorilla Mux router
-	router, err := generator.GenerateMuxRouter(doc, ops)
+	// 3) Create global middlewares (applies to all routes)
+	// e.g. a "requestLoggerMiddleware" that logs method & path
+	global := []mux.MiddlewareFunc{
+		requestLoggerMiddleware,
+	}
+
+	// 4) Generate the router
+	router, err := generator.GenerateMuxRouter(doc, ops, global...)
 	if err != nil {
 		log.Fatalf("Failed to generate router: %v", err)
 	}
 
-	// 4) Start the server
+	// 5) Start the HTTP server
 	log.Println("Server listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
 
-// Handler for "listUsers" (GET /users?limit=<int>)
+// =======================
+// SAMPLE HANDLERS
+// =======================
+
 func listUsersHandler(w http.ResponseWriter, r *http.Request) {
-	// Extract "limit" query param if provided
+	// Extract "limit" query param
 	limitStr := r.URL.Query().Get("limit")
 	limit, err := strconv.Atoi(limitStr)
 	if limitStr == "" {
-		limit = 10 // default from the OpenAPI
+		limit = 10
 	} else if err != nil {
-		http.Error(w, "Invalid 'limit' query param", http.StatusBadRequest)
+		http.Error(w, "invalid limit param", http.StatusBadRequest)
 		return
 	}
 
-	// In real code, you'd fetch from a DB. We'll just return some hard-coded data:
+	// Some sample data
 	allUsers := []User{
 		{UserID: "u1", Name: "Alice"},
 		{UserID: "u2", Name: "Bob"},
 		{UserID: "u3", Name: "Charlie"},
 	}
 
-	// If limit < number of users, truncate the slice
+	// Truncate if limit is smaller
 	if limit < len(allUsers) {
 		allUsers = allUsers[:limit]
 	}
@@ -67,22 +83,44 @@ func listUsersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(allUsers)
 }
 
-// Handler for "getUserById" (GET /users/{userId})
 func getUserByIdHandler(w http.ResponseWriter, r *http.Request) {
-	userId := mux.Vars(r)["userId"] // or use generator.GetPathParam(r, "userId")
+	userID := mux.Vars(r)["userId"]
 
-	// Fake some data in memory
+	// Some sample data
 	users := map[string]User{
 		"u1": {UserID: "u1", Name: "Alice"},
 		"u2": {UserID: "u2", Name: "Bob"},
 	}
 
-	user, ok := users[userId]
+	user, ok := users[userID]
 	if !ok {
-		http.Error(w, "User Not Found", http.StatusNotFound)
+		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(user)
+}
+
+// =======================
+// SAMPLE MIDDLEWARES
+// =======================
+
+// requestLoggerMiddleware logs the method, path, and duration for every request
+func requestLoggerMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf("[GLOBAL LOG] %s %s took %v", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+// logOperationMiddleware logs that a specific operationId was called
+func logOperationMiddleware(operationId string) mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("[OP LOG] operationId=%s called", operationId)
+			next.ServeHTTP(w, r)
+		})
+	}
 }

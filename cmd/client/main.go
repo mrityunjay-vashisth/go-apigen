@@ -13,47 +13,37 @@ type User struct {
 }
 
 func main() {
-	// We assume the server is running at localhost:8080
-
 	// 1) Call GET /users?limit=2
-	usersURL := "http://localhost:8080/users?limit=3"
-	usersResp, err := http.Get(usersURL)
+	resp, err := http.Get("http://localhost:8080/users?limit=2")
 	if err != nil {
-		log.Fatalf("Error calling %s: %v", usersURL, err)
+		log.Fatalf("Failed to call /users: %v", err)
 	}
-	defer usersResp.Body.Close()
-
-	if usersResp.StatusCode != http.StatusOK {
-		log.Fatalf("GET /users returned status %d", usersResp.StatusCode)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("GET /users status %d", resp.StatusCode)
 	}
 
 	var users []User
-	if err := json.NewDecoder(usersResp.Body).Decode(&users); err != nil {
-		log.Fatalf("Failed to decode /users response: %v", err)
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		log.Fatalf("Error decoding /users response: %v", err)
 	}
-
-	fmt.Printf("GET /users?limit=2 -> %d users:\n", len(users))
-	for _, u := range users {
-		fmt.Printf("  %v\n", u)
-	}
+	fmt.Printf("GET /users?limit=2 => %d users\n", len(users))
 
 	// 2) Call GET /users/u1
-	userURL := "http://localhost:8080/users/u2"
-	singleResp, err := http.Get(userURL)
+	single, err := http.Get("http://localhost:8080/users/u1")
 	if err != nil {
-		log.Fatalf("Error calling %s: %v", userURL, err)
+		log.Fatalf("Failed to call /users/u1: %v", err)
 	}
-	defer singleResp.Body.Close()
-
-	if singleResp.StatusCode == http.StatusNotFound {
-		fmt.Println("GET /users/u1 returned 404 (User Not Found)")
-	} else if singleResp.StatusCode == http.StatusOK {
-		var user User
-		if err := json.NewDecoder(singleResp.Body).Decode(&user); err != nil {
-			log.Fatalf("Failed to decode /users/u1 response: %v", err)
+	defer single.Body.Close()
+	if single.StatusCode == http.StatusOK {
+		var u User
+		if err := json.NewDecoder(single.Body).Decode(&u); err != nil {
+			log.Fatalf("Error decoding /users/u1 response: %v", err)
 		}
-		fmt.Printf("GET /users/u1 -> user: %#v\n", user)
+		fmt.Printf("GET /users/u1 => user: %v\n", u)
+	} else if single.StatusCode == http.StatusNotFound {
+		fmt.Println("GET /users/u1 => 404 Not Found")
 	} else {
-		fmt.Printf("GET /users/u1 returned status %d\n", singleResp.StatusCode)
+		fmt.Printf("GET /users/u1 => status %d\n", single.StatusCode)
 	}
 }

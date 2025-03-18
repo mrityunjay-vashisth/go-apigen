@@ -9,15 +9,26 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// OperationMap is a map from operationId -> http.HandlerFunc
-// The user of this package provides a function for each operationId found in the spec.
-type OperationMap map[string]http.HandlerFunc
+// RouteDefinition holds both a Handler and optional Middlewares for each operationId.
+type RouteDefinition struct {
+	Handler     http.HandlerFunc
+	Middlewares []mux.MiddlewareFunc
+}
+
+// OperationMap is a map of operationId → RouteDefinition.
+// The user populates it with the desired handler and optional middlewares.
+type OperationMap map[string]RouteDefinition
 
 // GenerateMuxRouter takes a parsed OpenAPI doc and an OperationMap (mapping operationId->handler),
 // then returns a fully-wired Gorilla Mux router. If an operationId has no matching handler,
 // it registers a default 501 (Not Implemented) handler.
-func GenerateMuxRouter(doc *openapi3.T, ops OperationMap) (*mux.Router, error) {
+func GenerateMuxRouter(doc *openapi3.T, ops OperationMap, globalMiddlewares ...mux.MiddlewareFunc) (*mux.Router, error) {
 	r := mux.NewRouter()
+
+	// Optionally attach global middlewares at the root router level
+	if len(globalMiddlewares) > 0 {
+		r.Use(globalMiddlewares...)
+	}
 
 	// For each path in the OpenAPI doc
 	for path, pathItem := range doc.Paths.Map() {
@@ -30,13 +41,26 @@ func GenerateMuxRouter(doc *openapi3.T, ops OperationMap) (*mux.Router, error) {
 			}
 
 			// Decide which handler to attach
-			handler, found := ops[opID]
+			routeDef, found := ops[opID]
 			if !found {
-				handler = notImplementedHandler(opID)
+				// No route def for this opID => use a default "not implemented" handler
+				routeDef = RouteDefinition{Handler: notImplementedHandler(opID)}
 			}
 
-			// Register the route
-			r.HandleFunc(path, handler).Methods(strings.ToUpper(method))
+			// 1) Create a route that matches this path & method
+			route := r.NewRoute().Path(path).Methods(strings.ToUpper(method))
+
+			// 2) Convert it to a subrouter so we can attach middlewares
+			subrouter := route.Subrouter()
+
+			// 3) Attach any middlewares for this operation to the subrouter
+			if len(routeDef.Middlewares) > 0 {
+				subrouter.Use(routeDef.Middlewares...)
+			}
+
+			// 4) Register the actual handler function on the subrouter
+			//    Notice we use HandleFunc("") because the subrouter already has the path set.
+			subrouter.HandleFunc("", routeDef.Handler)
 		}
 	}
 
